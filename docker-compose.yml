@@ -1,0 +1,77 @@
+# ============================================================================
+# Projeto Prisma — M5 (Roteamento e Encaminhamento)
+# Ambiente de Desenvolvimento Isolado
+# ============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  # M5 DATABASE — Banco de dados exclusivo do roteamento
+  # --------------------------------------------------------------------------
+  db-m5:
+    image: postgres:16-alpine
+    container_name: prisma-db-m5-isolated
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: roteamento
+    ports:
+      - "5437:5432"  # Mantém a mesma porta do infra global para facilitar inspeção
+    volumes:
+      - db-m5-isolated-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d roteamento"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # BROKER — RabbitMQ isolado para capturar/enviar eventos do M5
+  # --------------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: prisma-rabbitmq-isolated
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672"    # Conexão AMQP
+      - "15672:15672"  # Painel de gerenciamento (http://localhost:15672)
+    volumes:
+      - rabbitmq-isolated-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # M5 APLICAÇÃO 
+  # --------------------------------------------------------------------------
+  m5-roteamento:
+    build: .
+    container_name: prisma-m5-isolated
+    environment:
+      DATABASE_URL: jdbc:postgresql://db-m5:5432/roteamento
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      SECRETARIAS_API_URL: ${SECRETARIAS_API_URL}
+    ports:
+      - "8005:8000"  # API exposta em http://localhost:8005
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Permite acessar serviços rodando fora do Docker
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      db-m5:    { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  db-m5-isolated-data:
+  rabbitmq-isolated-data:
